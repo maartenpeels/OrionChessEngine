@@ -157,7 +157,7 @@ public class MyBot : IChessBot
         }
 
         if (depth == 0)
-            return (Move.NullMove, Quiesce(board, alpha, beta));
+            return (Move.NullMove, Quiescence(board, alpha, beta));
 
         if (board.IsInCheckmate())
             return (Move.NullMove, -9999);
@@ -201,7 +201,7 @@ public class MyBot : IChessBot
         return (bestMove, bestScore);
     }
 
-    int Quiesce(Board board, int alpha, int beta)
+    int Quiescence(Board board, int alpha, int beta)
     {
         var standPat = board.IsWhiteToMove ? Evaluate(board) : -Evaluate(board);
 
@@ -217,7 +217,7 @@ public class MyBot : IChessBot
         foreach (var move in moves)
         {
             board.MakeMove(move);
-            var score = -Quiesce(board, -beta, -alpha);
+            var score = -Quiescence(board, -beta, -alpha);
             board.UndoMove(move);
 
             if (score >= beta)
