@@ -3,19 +3,25 @@ using System.Collections.Generic;
 using System.Linq;
 using ChessChallenge.API;
 
+// Might still be private at the time of reading this
+// https://github.com/maartenpeels/PetitePawnWizard
+
 public class MyBot : IChessBot
 {
-    bool _initialized;
+    // Super ugly, but saves tokens by not having to pass these around
+    private Board? _board;
+    private Timer? _timer;
+    private int _maxMoveTime;
 
     // _, pawn, knight, bishop, rook, queen, king
-    int[] _pieceValues = { 0, 100, 320, 330, 500, 900, 1000 };
+    private readonly int[] _pieceValues = { 0, 100, 320, 330, 500, 900, 1000 };
 
     // 6 Piece-Square Tables
     // Values range from -50 to 50
     // Add 50 so that values range from 0 to 100
     // 100 can be stored in 7 bits
     // 6 * 7 = 42 bits = ulong(64 bits)
-    ulong[] _pieceSquareTablesEncoded =
+    private readonly ulong[] _pieceSquareTablesEncoded =
         {
             695353180210,354440316210,354440317490,12185111090,12185111090,354440317490,354440316210,695353180210,698048185700,357145808740,357145811300,
             13548427620,13548427620,357145811300,357145808740,698048185700,698027215420,357124839740,358467100230,14869799120,14869799120,358467100230,
@@ -25,48 +31,62 @@ public class MyBot : IChessBot
             2418709221180,2416014132535,2413340098610,2759622001970,2072427235890,1730182515250,1730182515250,2072427235890,2759622001970,2413340098610
         };
 
-    int[][] _pieceSquareTables = new int[7][];
+    private readonly int[][] _pieceSquareTables = new int[7][];
 
-    enum NodeTypes : byte
+    private enum NodeTypes : byte
     {
         Exact,
         LowerBound,
         UpperBound
-    };
-    Dictionary<ulong, (int score, Move move, int depth, NodeTypes type)> _transpositionTable = new();
-    ulong _tableSize = 10000000;
-
-    public Move Think(Board board, Timer timer)
-    {
-        var maxMoveTime = Math.Min(3000, (int)Math.Floor(timer.MillisecondsRemaining * 0.1));
-        if (timer.MillisecondsRemaining < 10000)
-            maxMoveTime = Math.Min(1000, (int)Math.Floor(timer.MillisecondsRemaining * 0.3));
-
-        if (!_initialized)
-        {
-            DecodePieceSquareTables();
-            _initialized = true;
-        }
-
-        var moves = board.GetLegalMoves();
-        var bestMove = moves[0];
-
-        for (var depth = 1; depth < 10 && timer.MillisecondsElapsedThisTurn < maxMoveTime; depth++)
-        {
-            bestMove = NegaMax(board, timer, maxMoveTime, depth, 0, int.MinValue, int.MaxValue).move;
-        }
-
-        return bestMove.IsNull ? moves[0] : bestMove;
     }
 
-    void OrderMoves(ref Move[] moves, Board board, Move moveToSearchFirst)
+    private readonly Dictionary<ulong, (int score, Move move, int depth, NodeTypes type)> _transpositionTable = new();
+    private const ulong TableSize = 10000000;
+
+    public MyBot()
     {
-        Array.Sort(moves,
-            (a, b) => -EvaluateMove(a, board, moveToSearchFirst)
-                .CompareTo(EvaluateMove(b, board, moveToSearchFirst)));
+        DecodePieceSquareTables();
     }
 
-    void DecodePieceSquareTables()
+    public Move Think(Board b, Timer t)
+    {
+        _maxMoveTime = (int)Math.Min((float)t.GameStartTimeMilliseconds / 35, t.MillisecondsRemaining * 0.1);
+        _board = b;
+        _timer = t;
+
+        var bestMove = _board.GetLegalMoves().First();
+        var depth = 1;
+        var alpha = -2147483648;
+        var beta = 2147483647;
+
+        while (depth < 10 && _timer.MillisecondsElapsedThisTurn < _maxMoveTime)
+        {
+            var result = NegaMax(depth, 0, alpha, beta);
+            
+            // Aspiration Window
+            if (result.score <= alpha || result.score >= beta)
+            {
+                alpha = -2147483648;
+                beta = 2147483647;
+                continue;
+            }
+
+            bestMove = result.move;
+            alpha = result.score - 30;
+            beta = result.score + 30;
+            depth++;
+        }
+        
+        return bestMove;
+    }
+
+    private void OrderMoves(ref Span<Move> moves, Move moveToSearchFirst)
+    {
+        moves.Sort((a, b) => -EvaluateMove(a, moveToSearchFirst)
+            .CompareTo(EvaluateMove(b, moveToSearchFirst)));
+    }
+
+    private void DecodePieceSquareTables()
     {
         for (var index = 0; index < 7; index++)
         {
@@ -79,28 +99,27 @@ public class MyBot : IChessBot
             _pieceSquareTables[index] = table;
         }
     }
-
-    int Evaluate(Board board)
+    
+    private int Evaluate()
     {
         var eval = 0;
-        var mod = board.IsWhiteToMove ? 1 : -1;
-        var pieceLists = board.GetAllPieceLists();
-
-        eval += pieceLists.SelectMany(pl => pl).Sum(p =>
+        var mod = _board.IsWhiteToMove ? 1 : -1;
+        var pieceLists = _board.GetAllPieceLists();
+        
+        foreach (var pl in pieceLists)
         {
-            var pieceValue = _pieceValues[(int)p.PieceType] * (p.IsWhite ? 1 : -1);
-            var pst = _pieceSquareTables[(int)p.PieceType];
-            if (!p.IsWhite)
+            var pieceValue = 2 * _pieceValues[(int)pl.TypeOfPieceInList] * (pl.IsWhitePieceList ? 1 : -1);
+            var pst = _pieceSquareTables[(int)pl.TypeOfPieceInList];
+            if (!pl.IsWhitePieceList)
                 pst = pst.Reverse().ToArray();
-            var squareValue = pst[p.Square.Index] * mod;
 
-            return pieceValue + squareValue;
-        });
+            eval += pl.Sum(p => (pst[p.Square.Index] * mod) + pieceValue);
+        }
 
         return eval;
     }
 
-    public float EvaluateMove(Move move, Board board, Move searchThisMoveFirst)
+    private float EvaluateMove(Move move, Move searchThisMoveFirst)
     {
         if (move.Equals(searchThisMoveFirst))
             return float.MaxValue;
@@ -109,32 +128,30 @@ public class MyBot : IChessBot
 
         if (move.IsCapture)
         {
-            score = 10 * _pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType] - _pieceValues[(int)board.GetPiece(move.StartSquare).PieceType];
-            score += score < 0 && board.SquareIsAttackedByOpponent(move.TargetSquare) ? -100 : 100;
+            score = 10 * _pieceValues[(int)_board.GetPiece(move.TargetSquare).PieceType] - _pieceValues[(int)_board.GetPiece(move.StartSquare).PieceType];
+            score += _board.SquareIsAttackedByOpponent(move.TargetSquare) ? -100 : 100;
         }
 
-        if (move.IsPromotion)
-        {
-            board.MakeMove(move);
-            score += _pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType];
-            board.UndoMove(move);
-        }
+        if (!move.IsPromotion) return score;
+        
+        _board.MakeMove(move);
+        score += _pieceValues[(int)_board.GetPiece(move.TargetSquare).PieceType];
+        _board.UndoMove(move);
 
         return score;
     }
-
-    (Move move, int score) NegaMax(Board board, Timer timer, int maxMoveTime, int depth, int ply, int alpha, int beta)
+    
+    private (Move move, int score) NegaMax(int depth, int ply, int alpha, int beta)
     {
-        if (ply > 0 && board.IsRepeatedPosition())
+        if (ply > 0 && _board.IsRepeatedPosition())
             return (Move.NullMove, 0);
 
         var originalAlpha = alpha;
-        var ttIndex = board.ZobristKey % _tableSize;
+        var ttIndex = _board.ZobristKey % TableSize;
         var moveToSearchFirst = Move.NullMove;
 
-        if (_transpositionTable.ContainsKey(ttIndex))
+        if (_transpositionTable.TryGetValue(ttIndex, out var ttEntry))
         {
-            var ttEntry = _transpositionTable[ttIndex];
             if (ttEntry.depth >= depth)
             {
                 switch (ttEntry.type)
@@ -142,10 +159,10 @@ public class MyBot : IChessBot
                     case NodeTypes.Exact:
                         return (ttEntry.move, ttEntry.score);
                     case NodeTypes.LowerBound:
-                        alpha = Math.Max(alpha, (int)ttEntry.score);
+                        alpha = Math.Max(alpha, ttEntry.score);
                         break;
                     case NodeTypes.UpperBound:
-                        beta = Math.Min(beta, (int)ttEntry.score);
+                        beta = Math.Min(beta, ttEntry.score);
                         break;
                 }
 
@@ -157,25 +174,29 @@ public class MyBot : IChessBot
         }
 
         if (depth == 0)
-            return (Move.NullMove, Quiescence(board, alpha, beta));
+            return (Move.NullMove, Quiescence(alpha, beta));
 
-        if (board.IsInCheckmate())
+        if (_board.IsInCheckmate())
             return (Move.NullMove, -9999);
 
-        if (board.IsDraw())
+        if (_board.IsDraw())
             return (Move.NullMove, 0);
+        
+        if (_board.IsInCheck() && depth < 20)
+            depth++;
 
-        var moves = board.GetLegalMoves();
-        OrderMoves(ref moves, board, moveToSearchFirst);
+        Span<Move> moves = stackalloc Move[256];
+        _board.GetLegalMovesNonAlloc(ref moves);
+        OrderMoves(ref moves, moveToSearchFirst);
 
-        var bestScore = int.MinValue;
-        var bestMove = Move.NullMove;
+        var bestScore = -1000;
+        var bestMove = moves[0];
 
         foreach (var move in moves)
         {
-            board.MakeMove(move);
-            var score = -NegaMax(board, timer, maxMoveTime, depth - 1, ply + 1, -beta, -alpha).score;
-            board.UndoMove(move);
+            _board.MakeMove(move);
+            var score = -NegaMax(depth - 1, ply + 1, -beta, -alpha).score;
+            _board.UndoMove(move);
 
             if (bestScore < score)
             {
@@ -184,7 +205,7 @@ public class MyBot : IChessBot
             }
             alpha = Math.Max(alpha, bestScore);
 
-            if (timer.MillisecondsElapsedThisTurn > maxMoveTime)
+            if (_timer.MillisecondsElapsedThisTurn > _maxMoveTime)
                 break;
 
             if (alpha >= beta)
@@ -201,9 +222,9 @@ public class MyBot : IChessBot
         return (bestMove, bestScore);
     }
 
-    int Quiescence(Board board, int alpha, int beta)
+    private int Quiescence(int alpha, int beta)
     {
-        var standPat = board.IsWhiteToMove ? Evaluate(board) : -Evaluate(board);
+        var standPat = _board.IsWhiteToMove ? Evaluate() : -Evaluate();
 
         if (standPat >= beta)
             return beta;
@@ -211,14 +232,15 @@ public class MyBot : IChessBot
         if (alpha < standPat)
             alpha = standPat;
 
-        var moves = board.GetLegalMoves(true);
-        OrderMoves(ref moves, board, Move.NullMove);
+        Span<Move> moves = stackalloc Move[256];
+        _board.GetLegalMovesNonAlloc(ref moves, true);
+        OrderMoves(ref moves, Move.NullMove);
 
         foreach (var move in moves)
         {
-            board.MakeMove(move);
-            var score = -Quiescence(board, -beta, -alpha);
-            board.UndoMove(move);
+            _board.MakeMove(move);
+            var score = -Quiescence(-beta, -alpha);
+            _board.UndoMove(move);
 
             if (score >= beta)
                 return beta;
