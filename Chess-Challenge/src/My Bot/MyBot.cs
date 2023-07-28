@@ -14,29 +14,31 @@ public class MyBot : IChessBot
     private int _maxMoveTime;
 
     // _, pawn, knight, bishop, rook, queen, king
-    private readonly int[] _pieceValues = { 0, 100, 320, 330, 500, 900, 1000 };
+    private readonly int[] _pieceValues = { 0, 100, 320, 330, 500, 900, 20000 };
 
     // 6 Piece-Square Tables
     // Values range from -50 to 50
     // Add 50 so that values range from 0 to 100
     // 100 can be stored in 7 bits
-    // 6 * 7 = 42 bits = ulong(64 bits)
+    // 7 * 7 = 49 bits = ulong(64 bits)
     private readonly ulong[] _pieceSquareTablesEncoded =
     {
-        695353180210, 354440316210, 354440317490, 12185111090, 12185111090, 354440317490, 354440316210, 695353180210,
-        698048185700, 357145808740, 357145811300, 13548427620, 13548427620, 357145811300, 357145808740, 698048185700,
-        698027215420, 357124839740, 358467100230, 14869799120, 14869799120, 358467100230, 357124839740, 698027215420,
-        699369392695, 357124922295, 358467100860, 14869799755, 14869799755, 358467100860, 357124922295, 699369392695,
-        1044308953650, 700722223410, 702064566450, 358467183430, 358467183430, 702064566450, 700722223410,
-        1042966776370, 1385221982775, 1045661948845, 1045661949480, 1045661950130, 1045661950130, 1045661949480,
-        1044319771565, 1385221982775, 2416014132535, 2418709221180, 1732856551740, 1731514375070, 1731514375070,
-        1731514374460, 2418709221180, 2416014132535, 2413340098610, 2759622001970, 2072427235890, 1730182515250,
-        1730182515250, 2072427235890, 2759622001970, 2413340098610
+        440500004290610, 88315370538290, 88315370539570, 87973115333170, 87973115333170, 88315370539570, 88315370538290,
+        695353180210, 88658978407780, 88318076030820, 220259471366500, 219915873982820, 219915873982820,
+        220259471366500, 88318076030820, 88658978407780, 88658957437500, 176278985283900, 308221722877510,
+        351858590687440, 351858590687440, 308221722877510, 176278985283900, 88658957437500, 88660299614775,
+        176278985366455, 352202187989180, 395839055799115, 395839055799115, 352202187989180, 176278985366455,
+        88660299614775, 89005239175730, 176622582667570, 352545785454770, 396182653182790, 396182653182790,
+        352545785454770, 176622582667570, 89003896998450, 89346152204855, 176967522393005, 308908917726760,
+        352889382838450, 352889382838450, 308908917726760, 176966180215725, 89346152204855, 90376944354615,
+        134360104554300, 177654716995900, 221633839930270, 221633839930270, 177653374818620, 134360104554300,
+        90376944354615, 2413340098610, 46740087113010, 90033357457970, 133671577848370, 133671577848370, 90033357457970,
+        46740087113010, 2413340098610
     };
 
     private readonly int[][] _pieceSquareTables = new int[7][];
 
-    private enum NodeTypes : byte
+    private enum NodeTypes
     {
         Exact,
         LowerBound,
@@ -84,12 +86,10 @@ public class MyBot : IChessBot
 
         return bestMove;
     }
-
-    private void OrderMoves(ref Span<Move> moves, Move moveToSearchFirst)
-    {
-        moves.Sort((a, b) => -EvaluateMove(a, moveToSearchFirst)
+    
+    private void OrderMoves(ref Span<Move> moves, Move moveToSearchFirst) => moves.Sort((a, b) =>
+        -EvaluateMove(a, moveToSearchFirst)
             .CompareTo(EvaluateMove(b, moveToSearchFirst)));
-    }
 
     private void DecodePieceSquareTables()
     {
@@ -98,7 +98,7 @@ public class MyBot : IChessBot
             var table = new int[64];
             for (var i = 0; i < 64; i++)
             {
-                table[i] = (int)((_pieceSquareTablesEncoded[index] >> (i * 7)) & 0x7F) - 50;
+                table[i] = (int)((_pieceSquareTablesEncoded[i] >> (index * 7)) & 0x7F) - 50;
             }
 
             _pieceSquareTables[index] = table;
@@ -108,21 +108,21 @@ public class MyBot : IChessBot
     private int Evaluate()
     {
         var eval = 0;
-        var mod = _board.IsWhiteToMove ? 1 : -1;
-        var pieceLists = _board.GetAllPieceLists();
-
-        foreach (var pl in pieceLists)
+        foreach (var pl in _board.GetAllPieceLists())
         {
             var pieceValue = 2 * _pieceValues[(int)pl.TypeOfPieceInList] * (pl.IsWhitePieceList ? 1 : -1);
-            var pst = _pieceSquareTables[(int)pl.TypeOfPieceInList];
+            var isKingAndEndgame = pl.TypeOfPieceInList == PieceType.King &&
+                                   BitboardHelper.GetNumberOfSetBits(_board.AllPiecesBitboard) < 16;
+            var pst = _pieceSquareTables[(int)pl.TypeOfPieceInList - 1 + (isKingAndEndgame ? 1 : 0)];
             if (!pl.IsWhitePieceList)
                 pst = pst.Reverse().ToArray();
 
-            eval += pl.Sum(p => (pst[p.Square.Index] * mod) + pieceValue);
+            eval += pl.Sum(p => (pst[p.Square.Index] * (_board.IsWhiteToMove ? 1 : -1)) + pieceValue);
         }
 
         return eval;
     }
+
 
     private float EvaluateMove(Move move, Move searchThisMoveFirst)
     {
@@ -139,12 +139,7 @@ public class MyBot : IChessBot
         }
 
         if (!move.IsPromotion) return score;
-
-        _board.MakeMove(move);
-        score += _pieceValues[(int)_board.GetPiece(move.TargetSquare).PieceType];
-        _board.UndoMove(move);
-
-        return score;
+        return score + _pieceValues[(int)move.PromotionPieceType];
     }
 
     private (Move move, int score) NegaMax(int depth, int ply, int alpha, int beta)
