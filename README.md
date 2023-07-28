@@ -1,4 +1,4 @@
-# Chess Coding Challenge (C#)
+# OrionChessEngine
 This my submission for the Tiny Chess Bots coding challenge.
 
 - Video: https://youtu.be/iScy18pVR58

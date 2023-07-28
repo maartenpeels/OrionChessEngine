@@ -4,7 +4,7 @@ using System.Linq;
 using ChessChallenge.API;
 
 // Might still be private at the time of reading this
-// https://github.com/maartenpeels/PetitePawnWizard
+// https://github.com/maartenpeels/OrionChessEngine
 
 public class MyBot : IChessBot
 {
