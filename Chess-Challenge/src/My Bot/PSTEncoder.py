@@ -52,7 +52,6 @@ king = [-30, -40, -40, -50, -50, -40, -40, -30,
         20, 20, 0, 0, 0, 0, 20, 20,
         20, 30, 10, 0, 0, 10, 30, 20]
 
-
 # 6 Piece-Square Tables
 # Values range from -50 to 50
 # Add 50 so that values range from 0 to 100
